@@ -6,7 +6,8 @@ import pytest
 
 from pycoldb.column import Column
 from pycoldb.column_family import ColumnFamily
-from pycoldb.errors import ColumnNotFoundError
+from pycoldb.errors import ColumnNotFoundError, InvalidTTLError
+from pycoldb.query import column_filter, query_with_filter, range_query
 from pycoldb.ttl import TTLEntry, TTLManager
 
 TTL_60_SECONDS = 60.0
@@ -77,6 +78,28 @@ class TestTTLManager:
         manager = TTLManager()
         with pytest.raises(ValueError, match="positive"):
             manager.set_ttl("row1", "col1", 0.0)
+
+    def test_invalid_ttl_raises_invalidttlerror(self) -> None:
+        """set_ttl raises the dedicated InvalidTTLError, not a bare ValueError."""
+        manager = TTLManager()
+        with pytest.raises(InvalidTTLError, match="positive"):
+            manager.set_ttl("row1", "col1", 0.0)
+
+    def test_colon_keys_do_not_collide(self) -> None:
+        """Row/column names containing a colon must not share a TTL entry."""
+        manager = TTLManager()
+        # With a naive "row:col" string key these two pairs would map to
+        # the same "a:b:c" key and clobber each other.
+        manager.set_ttl("a:b", "c", TTL_60_SECONDS)
+        manager.set_ttl("a", "b:c", TINY_TTL)
+        expected_count = 2
+        assert manager.entry_count == expected_count
+        time.sleep(TINY_TTL)
+        assert not manager.is_expired("a:b", "c")
+        assert manager.is_expired("a", "b:c")
+        # get_expired_columns must report the real column name, not a fragment.
+        assert manager.get_expired_columns("a") == ["b:c"]
+        assert manager.get_expired_columns("a:b") == []
 
     def test_remove_ttl(self) -> None:
         """Remove a TTL and verify it no longer expires."""
@@ -154,3 +177,73 @@ class TestTTLWithColumnFamily:
         time.sleep(TINY_TTL)
         # Should NOT raise because TTL was cleared
         assert cf.get_column("key1", "data").value == "permanent"
+
+
+class TestTTLReadVisibility:
+    """Expired columns must be hidden from every read path, not just get_column."""
+
+    def _expired_cf(self) -> ColumnFamily:
+        """Build a column family with one fully-expired row and one live row."""
+        cf = ColumnFamily(name="cache")
+        cf.put(
+            "gone",
+            Column(name="data", value="temp", timestamp=TIMESTAMP_1000),
+            ttl_seconds=TINY_TTL,
+        )
+        cf.put(
+            "alive",
+            Column(name="data", value="keep", timestamp=TIMESTAMP_1000),
+        )
+        time.sleep(TINY_TTL)
+        return cf
+
+    def test_row_column_names_hide_expired(self) -> None:
+        """Row.column_names skips expired columns when given the manager."""
+        cf = self._expired_cf()
+        row = cf.rows["gone"]
+        assert row.column_names(cf.ttl_manager) == []
+
+    def test_row_get_columns_hide_expired(self) -> None:
+        """Row.get_columns skips expired columns when given the manager."""
+        cf = self._expired_cf()
+        row = cf.rows["gone"]
+        assert row.get_columns(ttl_manager=cf.ttl_manager) == []
+        assert row.get_columns(["data"], cf.ttl_manager) == []
+
+    def test_row_has_column_hides_expired(self) -> None:
+        """Row.has_column reports expired columns as absent."""
+        cf = self._expired_cf()
+        row = cf.rows["gone"]
+        assert row.has_column("data") is True  # physically present
+        assert row.has_column("data", cf.ttl_manager) is False
+
+    def test_has_row_hides_fully_expired_row(self) -> None:
+        """A row whose only column expired is no longer 'present'."""
+        cf = self._expired_cf()
+        assert cf.has_row("gone") is False
+        assert cf.has_row("alive") is True
+
+    def test_row_keys_and_count_exclude_expired(self) -> None:
+        """row_keys / row_count only include rows with live columns."""
+        cf = self._expired_cf()
+        assert cf.row_keys() == ["alive"]
+        assert cf.row_count == 1
+
+    def test_range_query_excludes_expired_row(self) -> None:
+        """range_query must not return a fully-expired row."""
+        cf = self._expired_cf()
+        rows = range_query(cf)
+        assert [r.key for r in rows] == ["alive"]
+
+    def test_column_filter_hides_expired(self) -> None:
+        """column_filter hides expired columns when given the manager."""
+        cf = self._expired_cf()
+        row = cf.rows["gone"]
+        assert column_filter(row, ["data"]) != []  # without manager, still visible
+        assert column_filter(row, ["data"], cf.ttl_manager) == []
+
+    def test_query_with_filter_hides_expired(self) -> None:
+        """query_with_filter drops rows whose matching columns all expired."""
+        cf = self._expired_cf()
+        results = query_with_filter(cf, ["data"])
+        assert [key for key, _ in results] == ["alive"]

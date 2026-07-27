@@ -51,6 +51,22 @@ class TestRowBasics:
         assert row.get_column("math").value == "A+"
         assert row.get_column("math").timestamp == TIMESTAMP_2000
 
+    def test_older_timestamp_write_is_ignored(self) -> None:
+        """Last-write-wins: an older-timestamped write must not clobber newer data."""
+        row = Row(key="alice")
+        row.put_column(Column(name="math", value="A+", timestamp=TIMESTAMP_2000))
+        # A late-arriving, older write should be ignored.
+        row.put_column(Column(name="math", value="B", timestamp=TIMESTAMP_1000))
+        assert row.get_column("math").value == "A+"
+        assert row.get_column("math").timestamp == TIMESTAMP_2000
+
+    def test_equal_timestamp_write_overwrites(self) -> None:
+        """A write with an equal timestamp replaces the existing value."""
+        row = Row(key="alice")
+        row.put_column(Column(name="math", value="B", timestamp=TIMESTAMP_1000))
+        row.put_column(Column(name="math", value="A+", timestamp=TIMESTAMP_1000))
+        assert row.get_column("math").value == "A+"
+
     def test_column_names_sorted(self) -> None:
         """Verify column_names returns sorted names."""
         row = Row(key="alice")

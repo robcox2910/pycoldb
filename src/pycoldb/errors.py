@@ -66,12 +66,15 @@ class ColumnNotFoundError(PyColDBError):
     """
 
 
-class InvalidTTLError(PyColDBError):
+class InvalidTTLError(PyColDBError, ValueError):
     """Raise when an invalid TTL (time-to-live) value is provided.
 
     TTL is like a sticky note that falls off after a certain time.
     This error means you tried to set a nonsensical expiration time
     (like a negative number of seconds).
+
+    It is both a PyColDBError and a plain ValueError, so code that
+    catches either kind of error will still catch it.
     """
 
 
