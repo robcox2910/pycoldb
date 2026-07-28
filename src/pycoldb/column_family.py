@@ -144,9 +144,8 @@ class ColumnFamily:
         """
         row = self._get_row(row_key)
         for col_name in list(row.columns.keys()):
-            if col_name not in row.tombstones:
-                row.delete_column(col_name)
-                self.ttl_manager.remove_ttl(row_key, col_name)
+            row.delete_column(col_name)
+            self.ttl_manager.remove_ttl(row_key, col_name)
 
     def has_row(self, row_key: str) -> bool:
         """Check whether a row exists and has live columns.
@@ -155,21 +154,25 @@ class ColumnFamily:
             row_key: The row key to check.
 
         Returns:
-            True if the row exists and has at least one live column.
+            True if the row exists and has at least one live column
+            (not tombstoned and not expired).
 
         """
         if row_key not in self.rows:
             return False
-        return not self.rows[row_key].is_empty
+        return bool(self.rows[row_key].column_names(self.ttl_manager))
 
     def row_keys(self) -> list[str]:
         """Get all row keys that have live columns.
+
+        A row counts as live only if it still has at least one column
+        that is neither tombstoned nor TTL-expired.
 
         Returns:
             A sorted list of row keys.
 
         """
-        return sorted(key for key, row in self.rows.items() if not row.is_empty)
+        return sorted(key for key, row in self.rows.items() if row.column_names(self.ttl_manager))
 
     @property
     def row_count(self) -> int:
@@ -237,7 +240,7 @@ class ColumnFamily:
         """
         name = str(data["name"])
         rows_data = data.get("rows", {})
-        ttl_data = data.get("ttl", {})
+        ttl_data = data.get("ttl", [])
 
         rows: dict[str, Row] = {}
         if isinstance(rows_data, dict):
@@ -247,7 +250,7 @@ class ColumnFamily:
                     rows[str(key)] = Row.from_dict(row_dict)  # pyright: ignore[reportUnknownArgumentType]
 
         ttl_manager = TTLManager()
-        if isinstance(ttl_data, dict):
+        if isinstance(ttl_data, list):
             ttl_manager = TTLManager.from_dict(ttl_data)  # type: ignore[arg-type]
 
         return cls(name=name, rows=rows, ttl_manager=ttl_manager)

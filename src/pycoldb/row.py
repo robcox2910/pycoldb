@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pycoldb.column import Column
 from pycoldb.errors import ColumnNotFoundError
 from pycoldb.tombstone import Tombstone
+from pycoldb.ttl import TTLManager
 
 
 @dataclass
@@ -54,6 +55,12 @@ class Row:
     def put_column(self, column: Column) -> None:
         """Insert or update a column in this row.
 
+        This is "last write wins" by timestamp, just like the concept
+        docs describe: if a column with this name already exists and it
+        has a *newer* timestamp than the one you're writing, the older
+        write is ignored so the newest data always survives. Writing
+        with an equal-or-newer timestamp replaces the existing value.
+
         If a tombstone exists for this column name, it is removed
         since we're writing new data.
 
@@ -61,6 +68,9 @@ class Row:
             column: The column to insert or update.
 
         """
+        existing = self.columns.get(column.name)
+        if existing is not None and column.timestamp < existing.timestamp:
+            return
         self.columns[column.name] = column
         self.tombstones.pop(column.name, None)
 
@@ -106,42 +116,64 @@ class Row:
         del self.columns[name]
         self.tombstones[name] = Tombstone(column_name=name)
 
-    def has_column(self, name: str) -> bool:
-        """Check whether a column exists and is not tombstoned.
+    def has_column(self, name: str, ttl_manager: TTLManager | None = None) -> bool:
+        """Check whether a column exists and is still visible.
 
         Args:
             name: The column name to check.
+            ttl_manager: If provided, an expired column is treated as
+                gone, just like a tombstoned one.
 
         Returns:
-            True if the column exists and has no tombstone.
+            True if the column exists, has no tombstone, and (when a
+            ttl_manager is given) has not expired.
 
         """
-        return name in self.columns and name not in self.tombstones
+        if name not in self.columns or name in self.tombstones:
+            return False
+        return ttl_manager is None or not ttl_manager.is_expired(self.key, name)
 
-    def column_names(self) -> list[str]:
-        """Get the names of all live (non-tombstoned) columns.
+    def column_names(self, ttl_manager: TTLManager | None = None) -> list[str]:
+        """Get the names of all live (visible) columns.
+
+        A column is "live" if it has not been tombstoned and, when a
+        ttl_manager is provided, has not expired.
+
+        Args:
+            ttl_manager: If provided, expired columns are hidden too.
 
         Returns:
             A sorted list of column names.
 
         """
-        return sorted(name for name in self.columns if name not in self.tombstones)
+        names = (name for name in self.columns if name not in self.tombstones)
+        if ttl_manager is not None:
+            names = (name for name in names if not ttl_manager.is_expired(self.key, name))
+        return sorted(names)
 
-    def get_columns(self, names: list[str] | None = None) -> list[Column]:
+    def get_columns(
+        self,
+        names: list[str] | None = None,
+        ttl_manager: TTLManager | None = None,
+    ) -> list[Column]:
         """Get multiple columns, optionally filtered by name.
 
         Args:
             names: If provided, only return columns with these names.
                 If None, return all live columns.
+            ttl_manager: If provided, expired columns are hidden.
 
         Returns:
             A list of Column objects, sorted by name.
 
         """
         if names is None:
-            live_names = self.column_names()
+            live_names = self.column_names(ttl_manager)
         else:
-            live_names = sorted(n for n in names if n in self.columns and n not in self.tombstones)
+            candidates = (n for n in names if n in self.columns and n not in self.tombstones)
+            if ttl_manager is not None:
+                candidates = (n for n in candidates if not ttl_manager.is_expired(self.key, n))
+            live_names = sorted(candidates)
         return [self.columns[n] for n in live_names]
 
     @property

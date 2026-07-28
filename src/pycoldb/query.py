@@ -26,6 +26,7 @@ Example:
 from pycoldb.column import Column
 from pycoldb.column_family import ColumnFamily
 from pycoldb.row import Row
+from pycoldb.ttl import TTLManager
 
 
 def range_query(
@@ -73,7 +74,11 @@ def range_query(
     return result
 
 
-def column_filter(row: Row, column_names: list[str]) -> list[Column]:
+def column_filter(
+    row: Row,
+    column_names: list[str],
+    ttl_manager: TTLManager | None = None,
+) -> list[Column]:
     """Get only specific columns from a row.
 
     This is like looking at a student's record but only reading the
@@ -82,12 +87,14 @@ def column_filter(row: Row, column_names: list[str]) -> list[Column]:
     Args:
         row: The row to filter columns from.
         column_names: The names of the columns to include.
+        ttl_manager: If provided, expired columns are hidden from the
+            results, just like a normal read would hide them.
 
     Returns:
         A list of matching Column objects, sorted by name.
 
     """
-    return row.get_columns(column_names)
+    return row.get_columns(column_names, ttl_manager)
 
 
 def query_with_filter(
@@ -126,7 +133,7 @@ def query_with_filter(
     )
     result: list[tuple[str, list[Column]]] = []
     for row in rows:
-        cols = column_filter(row, column_names)
+        cols = column_filter(row, column_names, cf.ttl_manager)
         if cols:
             result.append((row.key, cols))
     return result

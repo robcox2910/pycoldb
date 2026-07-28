@@ -25,6 +25,8 @@ Example:
 import time
 from dataclasses import dataclass
 
+from pycoldb.errors import InvalidTTLError
+
 
 @dataclass
 class TTLEntry:
@@ -100,26 +102,30 @@ class TTLManager:
     should fall off in 60 seconds" and it remembers when each note
     should expire.
 
-    The key format is "(row_key, column_name)" to uniquely identify
-    each column that has a TTL set.
+    Each column that has a TTL set is uniquely identified by the pair
+    (row_key, column_name).
     """
 
     def __init__(self) -> None:
         """Initialize an empty TTL manager."""
-        self._entries: dict[str, TTLEntry] = {}
+        self._entries: dict[tuple[str, str], TTLEntry] = {}
 
-    def _make_key(self, row_key: str, column_name: str) -> str:
+    def _make_key(self, row_key: str, column_name: str) -> tuple[str, str]:
         """Create a composite key for the TTL lookup.
+
+        A tuple is used (rather than gluing the two strings together)
+        so that row keys or column names containing punctuation like a
+        colon can never accidentally collide with each other.
 
         Args:
             row_key: The row key.
             column_name: The column name.
 
         Returns:
-            A composite string key.
+            A (row_key, column_name) tuple key.
 
         """
-        return f"{row_key}:{column_name}"
+        return (row_key, column_name)
 
     def set_ttl(self, row_key: str, column_name: str, ttl_seconds: float) -> None:
         """Set a TTL for a specific column in a specific row.
@@ -130,12 +136,13 @@ class TTLManager:
             ttl_seconds: How many seconds until the column expires.
 
         Raises:
-            ValueError: If ttl_seconds is not positive.
+            InvalidTTLError: If ttl_seconds is not positive. (This is
+                also a ValueError, so ``except ValueError`` still works.)
 
         """
         if ttl_seconds <= 0:
             msg = f"TTL must be positive, got {ttl_seconds}"
-            raise ValueError(msg)
+            raise InvalidTTLError(msg)
         key = self._make_key(row_key, column_name)
         self._entries[key] = TTLEntry(created_at=time.time(), ttl_seconds=ttl_seconds)
 
@@ -180,37 +187,53 @@ class TTLManager:
             A list of column names that have expired.
 
         """
-        prefix = f"{row_key}:"
         expired: list[str] = []
-        for key, entry in self._entries.items():
-            if key.startswith(prefix) and entry.is_expired():
-                column_name = key[len(prefix) :]
+        for (entry_row_key, column_name), entry in self._entries.items():
+            if entry_row_key == row_key and entry.is_expired():
                 expired.append(column_name)
         return expired
 
-    def to_dict(self) -> dict[str, dict[str, float]]:
-        """Convert all TTL entries to a dictionary.
+    def to_dict(self) -> list[dict[str, str | float]]:
+        """Convert all TTL entries to a JSON-friendly list.
+
+        Each entry becomes a record with its row key, column name, and
+        timing. A list of records is used (rather than a dictionary) so
+        that row/column names are never squashed together into a single
+        text key, which keeps colons and other punctuation safe.
 
         Returns:
-            A dictionary mapping composite keys to TTL entry dicts.
+            A list of records, one per tracked TTL entry.
 
         """
-        return {key: entry.to_dict() for key, entry in self._entries.items()}
+        return [
+            {
+                "row_key": row_key,
+                "column_name": column_name,
+                "created_at": entry.created_at,
+                "ttl_seconds": entry.ttl_seconds,
+            }
+            for (row_key, column_name), entry in self._entries.items()
+        ]
 
     @classmethod
-    def from_dict(cls, data: dict[str, dict[str, float]]) -> TTLManager:
-        """Create a TTLManager from a dictionary.
+    def from_dict(cls, data: list[dict[str, str | float]]) -> TTLManager:
+        """Create a TTLManager from a list of records.
 
         Args:
-            data: Dictionary mapping composite keys to TTL entry dicts.
+            data: A list of records as produced by :meth:`to_dict`.
 
         Returns:
             A new TTLManager instance.
 
         """
         manager = cls()
-        for key, entry_data in data.items():
-            manager._entries[key] = TTLEntry.from_dict(entry_data)
+        for record in data:
+            row_key = str(record["row_key"])
+            column_name = str(record["column_name"])
+            manager._entries[(row_key, column_name)] = TTLEntry(
+                created_at=float(record["created_at"]),
+                ttl_seconds=float(record["ttl_seconds"]),
+            )
         return manager
 
     @property
