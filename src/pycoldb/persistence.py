@@ -20,6 +20,7 @@ Example:
 import json
 from pathlib import Path
 
+from pycoldb.atomic import atomic_write_text
 from pycoldb.errors import PersistenceError
 from pycoldb.keyspace import Keyspace
 
@@ -42,7 +43,7 @@ def save_keyspace(keyspace: Keyspace, file_path: str | Path) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         data = keyspace.to_dict()
-        path.write_text(json.dumps(data, indent=2, sort_keys=True))
+        atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True))
     except OSError as exc:
         msg = f"Failed to save keyspace to '{file_path}': {exc}"
         raise PersistenceError(msg) from exc
