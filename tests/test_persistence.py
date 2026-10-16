@@ -1,6 +1,7 @@
 """Tests for persistence (save/load) functionality."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -106,3 +107,36 @@ class TestLoadKeyspace:
         tombstones = restored_cf.get_tombstones()
         assert len(tombstones) == 1
         assert tombstones[0].column_name == "math"
+
+
+class _SimulatedCrashError(OSError):
+    """Stands in for the power going out part-way through a save."""
+
+
+def test_interrupted_save_keeps_the_previous_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a crash mid-save used to leave a truncated, unloadable file."""
+    ks = Keyspace(name="s")
+    ks.create_column_family("a")
+    path = tmp_path / "data.json"
+    save_keyspace(ks, path)
+    before = path.read_bytes()
+    ks.create_column_family("b")
+
+    def write_half_then_crash(self: Path, data: str, *_args: object, **_kwargs: object) -> int:
+        with self.open("w", encoding="utf-8") as handle:
+            handle.write(data[: len(data) // 2])
+        raise _SimulatedCrashError
+
+    def crash(*_args: object) -> None:
+        raise _SimulatedCrashError
+
+    monkeypatch.setattr(Path, "write_text", write_half_then_crash)
+    monkeypatch.setattr(os, "replace", crash)
+    with pytest.raises((OSError, PersistenceError)):
+        save_keyspace(ks, path)
+    monkeypatch.undo()
+    assert path.read_bytes() == before
+    load_keyspace(path)
+    assert [p.name for p in tmp_path.iterdir()] == ["data.json"]
