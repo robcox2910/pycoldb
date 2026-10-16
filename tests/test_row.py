@@ -179,3 +179,44 @@ class TestRowSerialization:
         row = Row.from_dict(data)
         assert row.key == "test"
         assert row.is_empty
+
+
+class TestDeletesWinOverOlderWrites:
+    """Last-write-wins includes deletes: an older write can't undo a newer delete."""
+
+    def test_stale_write_after_delete_stays_deleted(self) -> None:
+        """Regression: a write older than the delete used to bring the column back."""
+        row = Row(key="alice")
+        row.put_column(Column(name="grade", value="fresh", timestamp=2000))
+        row.delete_column("grade")
+        row.put_column(Column(name="grade", value="stale", timestamp=1000))
+        assert not row.has_column("grade")
+        with pytest.raises(ColumnNotFoundError):
+            row.get_column("grade")
+
+    def test_write_at_the_same_time_as_the_delete_loses(self) -> None:
+        """On a tie, the delete wins (like Cassandra)."""
+        row = Row(key="alice")
+        row.put_column(Column(name="grade", value="A", timestamp=2000))
+        row.delete_column("grade")
+        row.put_column(Column(name="grade", value="B", timestamp=2000))
+        assert not row.has_column("grade")
+
+    def test_newer_write_after_delete_brings_the_column_back(self) -> None:
+        """A write that is genuinely newer than the delete is kept."""
+        row = Row(key="alice")
+        row.put_column(Column(name="grade", value="A", timestamp=2000))
+        row.delete_column("grade")
+        row.put_column(Column(name="grade", value="B", timestamp=3000))
+        assert row.get_column("grade").value == "B"
+        assert "grade" not in row.tombstones
+
+    def test_delete_can_be_stamped_with_its_own_time(self) -> None:
+        """An explicit delete time hides every write up to that moment."""
+        row = Row(key="alice")
+        row.put_column(Column(name="grade", value="A", timestamp=1000))
+        row.delete_column("grade", timestamp=5000)
+        row.put_column(Column(name="grade", value="late but old", timestamp=3000))
+        assert not row.has_column("grade")
+        row.put_column(Column(name="grade", value="newest", timestamp=6000))
+        assert row.get_column("grade").value == "newest"

@@ -149,3 +149,12 @@ class TestColumnFamilySerialization:
         assert restored.name == "grades"
         assert restored.get_column("alice", "math").value == VALUE_95
         assert restored.get_column("bob", "science").value == VALUE_88
+
+
+def test_column_family_delete_is_last_write_wins() -> None:
+    """Through the column family too, a stale write can't resurrect a deleted column."""
+    cf = ColumnFamily(name="grades")
+    cf.put("alice", Column(name="math", value="A", timestamp=2000))
+    cf.delete_column("alice", "math", timestamp=2500)
+    cf.put("alice", Column(name="math", value="old", timestamp=2400))
+    assert not cf.get_row("alice").has_column("math")

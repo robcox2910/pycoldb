@@ -116,12 +116,16 @@ class ColumnFamily:
         """
         return self._get_row(row_key)
 
-    def delete_column(self, row_key: str, column_name: str) -> None:
+    def delete_column(
+        self, row_key: str, column_name: str, *, timestamp: float | None = None
+    ) -> None:
         """Soft-delete a column by placing a tombstone.
 
         Args:
             row_key: The row containing the column.
             column_name: The column to delete.
+            timestamp: When the delete happened (defaults to the deleted
+                column's own timestamp). Older writes can't undo it.
 
         Raises:
             RowNotFoundError: If the row doesn't exist.
@@ -129,14 +133,16 @@ class ColumnFamily:
 
         """
         row = self._get_row(row_key)
-        row.delete_column(column_name)
+        row.delete_column(column_name, timestamp=timestamp)
         self.ttl_manager.remove_ttl(row_key, column_name)
 
-    def delete_row(self, row_key: str) -> None:
+    def delete_row(self, row_key: str, *, timestamp: float | None = None) -> None:
         """Soft-delete an entire row by tombstoning all its columns.
 
         Args:
             row_key: The row to delete.
+            timestamp: When the delete happened (defaults to each column's
+                own timestamp).
 
         Raises:
             RowNotFoundError: If the row doesn't exist.
@@ -144,7 +150,7 @@ class ColumnFamily:
         """
         row = self._get_row(row_key)
         for col_name in list(row.columns.keys()):
-            row.delete_column(col_name)
+            row.delete_column(col_name, timestamp=timestamp)
             self.ttl_manager.remove_ttl(row_key, col_name)
 
     def has_row(self, row_key: str) -> bool:
