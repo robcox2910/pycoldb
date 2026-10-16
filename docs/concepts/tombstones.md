@@ -29,6 +29,24 @@ print(len(tombstones))  # 1
 print(tombstones[0].column_name)  # 'math'
 ```
 
+## Stopping the Zombies: Tombstones Have a Time
+
+Every write has a timestamp, and the newest write wins ("last write wins").
+A delete is just another kind of write, so a tombstone has a time too: by
+default, the time of the value it crossed out (or a time you give it).
+
+That's what stops zombie data. If an *old* write turns up late -- say a slow
+computer finally sends its copy -- it is older than the tombstone, so it is
+ignored. Only a write that is genuinely *newer* than the delete can bring the
+column back. If the two are exactly the same time, the delete wins.
+
+```python
+grades.put("bob", Column(name="art", value="B", timestamp=2000))
+grades.delete_column("bob", "art")                                # deleted at 2000
+grades.put("bob", Column(name="art", value="old", timestamp=1000))  # too old: ignored
+grades.put("bob", Column(name="art", value="new", timestamp=3000))  # newer: it's back!
+```
+
 ## Cleaning Up Tombstones
 
 Tombstones take up space. Over time, you should clean them up using **compaction** -- that's like rewriting your notebook on a fresh page, leaving out all the crossed-out stuff.

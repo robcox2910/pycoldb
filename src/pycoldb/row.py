@@ -61,13 +61,17 @@ class Row:
         write is ignored so the newest data always survives. Writing
         with an equal-or-newer timestamp replaces the existing value.
 
-        If a tombstone exists for this column name, it is removed
-        since we're writing new data.
+        Deletes play by the same rule. If the column was deleted, a write
+        only brings it back when it is *newer* than the delete -- an old,
+        late-arriving write can't undo it. On a tie, the delete wins.
 
         Args:
             column: The column to insert or update.
 
         """
+        tombstone = self.tombstones.get(column.name)
+        if tombstone is not None and column.timestamp <= tombstone.deleted_at:
+            return
         existing = self.columns.get(column.name)
         if existing is not None and column.timestamp < existing.timestamp:
             return
@@ -96,15 +100,22 @@ class Row:
             raise ColumnNotFoundError(msg)
         return self.columns[name]
 
-    def delete_column(self, name: str) -> None:
+    def delete_column(self, name: str, *, timestamp: float | None = None) -> None:
         """Soft-delete a column by placing a tombstone.
 
         The column data is removed but a tombstone marker is left
         behind. This is like crossing something out with a pen
         instead of erasing it.
 
+        The tombstone is stamped with *when* the delete happened, on the
+        same clock as the writes: by default the deleted column's own
+        timestamp, or ``timestamp`` if you give one. Any later write that
+        is not newer than that stamp is ignored.
+
         Args:
             name: The column name to delete.
+            timestamp: When the delete happened (defaults to the deleted
+                column's timestamp).
 
         Raises:
             ColumnNotFoundError: If the column doesn't exist.
@@ -113,8 +124,9 @@ class Row:
         if name not in self.columns:
             msg = f"Column '{name}' not found in row '{self.key}'"
             raise ColumnNotFoundError(msg)
-        del self.columns[name]
-        self.tombstones[name] = Tombstone(column_name=name)
+        deleted = self.columns.pop(name)
+        deleted_at = deleted.timestamp if timestamp is None else timestamp
+        self.tombstones[name] = Tombstone(column_name=name, deleted_at=deleted_at)
 
     def has_column(self, name: str, ttl_manager: TTLManager | None = None) -> bool:
         """Check whether a column exists and is still visible.
