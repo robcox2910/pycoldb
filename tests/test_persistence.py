@@ -140,3 +140,24 @@ def test_interrupted_save_keeps_the_previous_file(
     assert path.read_bytes() == before
     load_keyspace(path)
     assert [p.name for p in tmp_path.iterdir()] == ["data.json"]
+
+
+WRONG_SHAPES = [
+    "{}",
+    '{"name": "k", "column_families": [1]}',
+    '{"name": "k", "column_families": {"cf": 1}}',
+]
+
+
+class TestWrongShapeFiles:
+    """Valid JSON that isn't a saved keyspace is refused, never loaded as empty."""
+
+    @pytest.mark.parametrize("content", WRONG_SHAPES)
+    def test_wrong_shape_raises_persistence_error_naming_the_file(
+        self, tmp_path: Path, content: str
+    ) -> None:
+        """Loading it raises PersistenceError with the file name, so it can't be overwritten."""
+        path = tmp_path / "saved.json"
+        path.write_text(content, encoding="utf-8")
+        with pytest.raises(PersistenceError, match=r"saved\.json"):
+            load_keyspace(path)

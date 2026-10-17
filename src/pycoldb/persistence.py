@@ -19,6 +19,7 @@ Example:
 
 import json
 from pathlib import Path
+from typing import cast
 
 from pycoldb.atomic import atomic_write_text
 from pycoldb.errors import PersistenceError
@@ -74,8 +75,23 @@ def load_keyspace(file_path: str | Path) -> Keyspace:
         msg = f"Failed to load keyspace from '{file_path}': {exc}"
         raise PersistenceError(msg) from exc
 
+    # Refuse anything that isn't a saved keyspace, rather than loading it as
+    # an empty one that the next save would write over.
     if not isinstance(data, dict):
         msg = f"Invalid keyspace data in '{file_path}': expected a JSON object"
         raise PersistenceError(msg)
+    fields = cast("dict[str, object]", data)
+    families = fields.get("column_families", {})
+    if (
+        not isinstance(fields.get("name"), str)
+        or not isinstance(families, dict)
+        or not all(isinstance(cf, dict) for cf in cast("dict[object, object]", families).values())
+    ):
+        msg = f"Invalid keyspace data in '{file_path}': not a saved keyspace"
+        raise PersistenceError(msg)
 
-    return Keyspace.from_dict(data)  # pyright: ignore[reportUnknownArgumentType]
+    try:
+        return Keyspace.from_dict(fields)
+    except (KeyError, TypeError, ValueError) as exc:
+        msg = f"Invalid keyspace data in '{file_path}': {exc}"
+        raise PersistenceError(msg) from exc
