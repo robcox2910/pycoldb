@@ -29,7 +29,7 @@ from pycoldb.column import Column
 from pycoldb.errors import ColumnNotFoundError, RowNotFoundError
 from pycoldb.row import Row
 from pycoldb.tombstone import Tombstone
-from pycoldb.ttl import TTLManager
+from pycoldb.ttl import TTLManager, check_ttl
 
 
 @dataclass
@@ -70,7 +70,13 @@ class ColumnFamily:
             ttl_seconds: Optional time-to-live in seconds. If set,
                 the column will expire after this many seconds.
 
+        Raises:
+            InvalidTTLError: If ttl_seconds is not positive. Nothing is
+                written: the check happens before the write.
+
         """
+        if ttl_seconds is not None:
+            check_ttl(ttl_seconds)
         if row_key not in self.rows:
             self.rows[row_key] = Row(key=row_key)
         self.rows[row_key].put_column(column)

@@ -29,6 +29,22 @@ from dataclasses import dataclass
 from pycoldb.errors import InvalidTTLError
 
 
+def check_ttl(ttl_seconds: float) -> None:
+    """Refuse a TTL that isn't a positive number of seconds.
+
+    Args:
+        ttl_seconds: The TTL to check.
+
+    Raises:
+        InvalidTTLError: If ttl_seconds is not positive. (This is also a
+            ValueError, so ``except ValueError`` still works.)
+
+    """
+    if ttl_seconds <= 0:
+        msg = f"TTL must be positive, got {ttl_seconds}"
+        raise InvalidTTLError(msg)
+
+
 @dataclass
 class TTLEntry:
     """Track the expiration time for a single column.
@@ -162,9 +178,7 @@ class TTLManager:
                 also a ValueError, so ``except ValueError`` still works.)
 
         """
-        if ttl_seconds <= 0:
-            msg = f"TTL must be positive, got {ttl_seconds}"
-            raise InvalidTTLError(msg)
+        check_ttl(ttl_seconds)
         key = self._make_key(row_key, column_name)
         self._entries[key] = TTLEntry(created_at=self._now(), ttl_seconds=ttl_seconds)
 

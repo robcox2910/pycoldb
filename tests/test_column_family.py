@@ -4,7 +4,8 @@ import pytest
 
 from pycoldb.column import Column
 from pycoldb.column_family import ColumnFamily
-from pycoldb.errors import ColumnNotFoundError, RowNotFoundError
+from pycoldb.errors import ColumnNotFoundError, InvalidTTLError, RowNotFoundError
+from pycoldb.ttl import TTLManager
 
 TIMESTAMP_1000 = 1000.0
 TIMESTAMP_2000 = 2000.0
@@ -158,3 +159,15 @@ def test_column_family_delete_is_last_write_wins() -> None:
     cf.delete_column("alice", "math", timestamp=2500)
     cf.put("alice", Column(name="math", value="old", timestamp=2400))
     assert not cf.get_row("alice").has_column("math")
+
+
+class TestPutWithTTL:
+    """A TTL belongs to the write it came with, and only to a write that lands."""
+
+    def test_a_bad_ttl_refuses_the_whole_write(self) -> None:
+        """Regression (found by the model check): a TTL of 0 used to raise *after* writing."""
+        cf = ColumnFamily(name="grades")
+        with pytest.raises(InvalidTTLError):
+            cf.put("alice", Column(name="alice", value="x", timestamp=3.0), ttl_seconds=0.0)
+        assert not cf.has_row("alice")
+        assert cf.ttl_manager.entry_count == 0
