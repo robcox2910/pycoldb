@@ -2,6 +2,7 @@
 
 import json
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -161,3 +162,86 @@ class TestWrongShapeFiles:
         path.write_text(content, encoding="utf-8")
         with pytest.raises(PersistenceError, match=r"saved\.json"):
             load_keyspace(path)
+
+
+def _save_file(
+    *,
+    family: dict[str, object] | None = None,
+    row: dict[str, object] | None = None,
+    column: dict[str, object] | None = None,
+    tombstones: dict[str, object] | None = None,
+    ttl: Sequence[object] | None = None,
+) -> str:
+    """Return a one-grade save file (alice's math), with any part swapped for something else."""
+    math = {"name": "math", "value": "A", "timestamp": 1.0} if column is None else column
+    alice = {"key": "alice", "columns": {"math": math}, "tombstones": tombstones or {}}
+    grades = {
+        "name": "grades",
+        "rows": {"alice": alice if row is None else row},
+        "ttl": list(ttl or []),
+    }
+    return json.dumps({"name": "school", "column_families": {"grades": family or grades}})
+
+
+DAMAGED_FILES = {
+    # Found by test_any_bytes_on_disk_load_or_raise_persistence_error.
+    "not UTF-8 text": b"\x80",
+    # Python refuses to read a whole number this long (a ValueError).
+    "5000-digit number": b"1" * 5000,
+    # Nested too deep for json to read (a RecursionError).
+    "nested too deep": b"[" * 100_000,
+    # Too big for a float (an OverflowError).
+    "timestamp too big": _save_file(
+        column={"name": "math", "value": "A", "timestamp": 10**400}
+    ).encode(),
+    # Shapes save_keyspace never writes, which used to load as something else.
+    "value is a list": _save_file(column={"name": "math", "value": [1], "timestamp": 1.0}).encode(),
+    "timestamp is text": _save_file(
+        column={"name": "math", "value": "A", "timestamp": "1"}
+    ).encode(),
+    "timestamp is true": _save_file(
+        column={"name": "math", "value": "A", "timestamp": True}
+    ).encode(),
+    "column under the wrong name": _save_file(
+        column={"name": "art", "value": "A", "timestamp": 1.0}
+    ).encode(),
+    "row under the wrong key": _save_file(
+        row={"key": "bob", "columns": {}, "tombstones": {}}
+    ).encode(),
+    "family under the wrong name": _save_file(
+        family={"name": "art", "rows": {}, "ttl": []}
+    ).encode(),
+    "family without rows": _save_file(family={"name": "grades", "ttl": []}).encode(),
+    "column both live and deleted": _save_file(
+        tombstones={"math": {"column_name": "math", "deleted_at": 1.0}}
+    ).encode(),
+    "the same TTL twice": _save_file(
+        ttl=[{"row_key": "alice", "column_name": "math", "created_at": 1.0, "ttl_seconds": 5.0}] * 2
+    ).encode(),
+    "TTL of zero": _save_file(
+        ttl=[{"row_key": "alice", "column_name": "math", "created_at": 1.0, "ttl_seconds": 0}]
+    ).encode(),
+}
+
+
+class TestDamagedSaveFiles:
+    """Every damaged save file is refused with a PersistenceError naming it, never another error."""
+
+    @pytest.mark.parametrize("content", DAMAGED_FILES.values(), ids=DAMAGED_FILES.keys())
+    def test_damaged_file_raises_persistence_error(self, tmp_path: Path, content: bytes) -> None:
+        """Loading it raises PersistenceError with the file name."""
+        path = tmp_path / "saved.json"
+        path.write_bytes(content)
+        with pytest.raises(PersistenceError, match=r"saved\.json"):
+            load_keyspace(path)
+
+    def test_the_undamaged_file_loads(self, tmp_path: Path) -> None:
+        """The file the damaged ones start from is a good save file."""
+        path = tmp_path / "saved.json"
+        path.write_text(
+            _save_file(
+                ttl=[{"row_key": "alice", "column_name": "math", "created_at": 1, "ttl_seconds": 5}]
+            ),
+            encoding="utf-8",
+        )
+        assert load_keyspace(path).get_column_family("grades").ttl_manager.entry_count == 1
