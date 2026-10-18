@@ -155,14 +155,15 @@ class TestTTLWithColumnFamily:
 
     def test_expired_column_raises(self) -> None:
         """Raise ColumnNotFoundError for expired columns."""
-        cf = ColumnFamily(name="cache")
+        now = [CREATED_AT_1000]
+        cf = ColumnFamily(name="cache", ttl_manager=TTLManager(clock=lambda: now[0]))
         cf.put(
             "key1",
             Column(name="data", value="temp", timestamp=TIMESTAMP_1000),
-            ttl_seconds=TINY_TTL,
+            ttl_seconds=TTL_60_SECONDS,
         )
         cf.put("key1", Column(name="keep", value="permanent", timestamp=TIMESTAMP_1000))
-        time.sleep(TINY_TTL)
+        now[0] += TTL_60_SECONDS
         with pytest.raises(ColumnNotFoundError, match="expired"):
             cf.get_column("key1", "data")
 

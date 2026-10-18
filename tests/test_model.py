@@ -36,7 +36,7 @@ from pycoldb.column import Column
 from pycoldb.column_family import ColumnFamily
 from pycoldb.compaction import compact_column_family
 from pycoldb.errors import ColumnNotFoundError, InvalidTTLError, RowNotFoundError
-from pycoldb.query import query_with_filter, range_query
+from pycoldb.query import column_filter, query_with_filter, range_query
 from pycoldb.ttl import TTLManager
 from tests.strategies import (
     ColumnValue,
@@ -64,9 +64,10 @@ def bad_ttls() -> st.SearchStrategy[float]:
     return st.integers(max_value=0).map(float)
 
 
-def maybe_timestamps() -> st.SearchStrategy[float | None]:
-    """Make no time at all (use the default), or a write time from a few seconds."""
-    return st.one_of(st.none(), timestamps())
+def delete_times() -> st.SearchStrategy[float | None]:
+    """Make no time at all (use the default), or a delete time from 0 to 3 seconds."""
+    # 0 is earlier than every write, and is the time a careless ``or`` drops.
+    return st.one_of(st.none(), st.integers(min_value=0, max_value=3).map(float))
 
 
 def maybe_names() -> st.SearchStrategy[str | None]:
@@ -158,7 +159,7 @@ class ColumnFamilyMachine(RuleBasedStateMachine):
 
     # --- Deleting ------------------------------------------------------------
 
-    @rule(row=st.one_of(rows, any_names()), name=few_names(), timestamp=maybe_timestamps())
+    @rule(row=st.one_of(rows, any_names()), name=few_names(), timestamp=delete_times())
     def delete_column(self, row: str, name: str, timestamp: float | None) -> None:
         """Delete a grade: a row with nothing live, or a grade that isn't live, is refused."""
         if not self.live_grades(row):
@@ -174,7 +175,7 @@ class ColumnFamilyMachine(RuleBasedStateMachine):
         grade.deleted_at = grade.timestamp if timestamp is None else timestamp
         grade.expires_at = None
 
-    @rule(row=st.one_of(rows, any_names()), timestamp=maybe_timestamps())
+    @rule(row=st.one_of(rows, any_names()), timestamp=delete_times())
     def delete_row(self, row: str, timestamp: float | None) -> None:
         """Delete every live grade in a row; a row with nothing live is refused."""
         live = self.live_grades(row)
@@ -237,22 +238,36 @@ class ColumnFamilyMachine(RuleBasedStateMachine):
         assert found.column_names(self.cf.ttl_manager) == sorted(self.live_grades(row))
         found.put_column(Column(name="sneaky", value="x", timestamp=99.0))  # must not stick
 
-    @rule(start=maybe_names(), end=maybe_names(), names=st.lists(few_names(), max_size=3))
-    def query(self, start: str | None, end: str | None, names: list[str]) -> None:
+    @rule(
+        start=maybe_names(),
+        end=maybe_names(),
+        with_start=st.booleans(),
+        with_end=st.booleans(),
+        names=st.lists(few_names(), max_size=3),
+    )
+    def query(
+        self, start: str | None, end: str | None, with_start: bool, with_end: bool, names: list[str]
+    ) -> None:
         """Query a range of rows, with and without a column filter: a plain loop must agree."""
         wanted = [
             row
             for row in self.live_rows()
-            if (start is None or row >= start) and (end is None or row <= end)
+            if (start is None or row > start or (with_start and row == start))
+            and (end is None or row < end or (with_end and row == end))
         ]
-        found = range_query(self.cf, start_key=start, end_key=end)
+        found = range_query(self.cf, start, end, inclusive_start=with_start, inclusive_end=with_end)
         assert [r.key for r in found] == wanted
+        for row in found:
+            kept = [c.name for c in column_filter(row, names, self.cf.ttl_manager)]
+            assert kept == sorted(n for n in self.live_grades(row.key) if n in names)
         expected = [
             (row, sorted(n for n in self.live_grades(row) if n in names))
             for row in wanted
             if any(n in names for n in self.live_grades(row))
         ]
-        filtered = query_with_filter(self.cf, names, start_key=start, end_key=end)
+        filtered = query_with_filter(
+            self.cf, names, start, end, inclusive_start=with_start, inclusive_end=with_end
+        )
         assert [(key, [c.name for c in cols]) for key, cols in filtered] == expected
 
     @invariant()

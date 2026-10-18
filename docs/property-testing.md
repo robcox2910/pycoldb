@@ -94,8 +94,10 @@ Line by line:
   of the real clock, so a grade can expire in an instant and the test never
   has to sleep.
 - **`what_readers_see(cf)`** asks every question a reader could ask: which
-  rows are there, how many, does each row exist, what are its live
-  columns, and what does `get_column` say for every row and column name.
+  rows are there, how many, does each row exist, what do `get_row`,
+  `range_query` and `query_with_filter` hand back (whole rows, down to
+  every timestamp), and what does `get_column` say for every row and
+  column name.
   If a read raises, the error's *name* goes in the list, so "not found"
   counts as an answer too.
 - **The `assert`** is the rule itself: compact, ask again, and every
@@ -257,10 +259,7 @@ E       Failing test case: <state machine>
 E       state = ColumnFamilyMachine()
 E       state.same_crossed_out_grades()
 E       state.same_rows_and_grades()
-E       rows_0 = state.put_new_row(name='alice', row='alice', timestamp=0.0, ttl=None, value='')
-E       state.same_crossed_out_grades()
-E       state.same_rows_and_grades()
-E       state.put_again(name=rows_0, row=rows_0, timestamp=1.0, ttl=None, value='')
+E       rows_0 = state.put_new_row(name='alice', row='alice', timestamp=1.0, ttl=None, value='')
 E       state.same_crossed_out_grades()
 E       state.same_rows_and_grades()
 E       state.delete_row(row=rows_0, timestamp=0.0)
@@ -269,12 +268,15 @@ E       state.teardown()
 ```
 
 Read the story at the bottom like a script. Hypothesis tried long, messy
-stories, then shrank them down to **three steps**: write a grade for
-alice at time `0.0`, write it again at time `1.0`, then delete alice's
-whole row, saying "this delete happened at time `0.0`". The tombstone says
-`1.0` (the grade's own time), but the notebook knows the delete was at
-`0.0`. (`rows_0` is the bag's name for `'alice'`, which here is both the row
-and the column.)
+stories, then shrank them down to **two steps**: write a grade for alice
+at time `1.0`, then delete alice's whole row, saying "this delete happened
+at time `0.0`". The tombstone says `1.0` (the grade's own time), but the
+notebook knows the delete was at `0.0`. (`rows_0` is the bag's name for
+the row `'alice'`.)
+
+Wait, a delete *older* than the grade still crosses it out? Yes: that's
+the documented rule. An explicit delete always crosses the grade out; its
+time only decides which *later* writes can undo it.
 
 That matters. A late write stamped `0.5` is newer than a delete at `0.0`,
 so it should land. Against a tombstone at `1.0` it loses, and a real grade
@@ -362,7 +364,7 @@ The `--no-cov` turns off the coverage check, which expects the *whole*
 test suite to run and would fail on two files.
 
 Run them the long way (2,000 random examples each, different every run)
-to hunt for rarer bugs. It takes about 3 minutes:
+to hunt for rarer bugs. It takes a few minutes:
 
 ```bash
 uv run pytest tests/test_properties.py tests/test_model.py --no-cov --hypothesis-profile=thorough

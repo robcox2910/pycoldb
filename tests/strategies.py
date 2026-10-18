@@ -111,7 +111,8 @@ def column_values() -> st.SearchStrategy[ColumnValue]:
 
 def timestamps() -> st.SearchStrategy[float]:
     """Make a write time from a few whole seconds, so two writes often tie."""
-    return st.integers(min_value=0, max_value=3).map(float)
+    # Writes start at 1 so a delete can be stamped 0, before every write.
+    return st.integers(min_value=1, max_value=3).map(float)
 
 
 def ttls() -> st.SearchStrategy[float | None]:

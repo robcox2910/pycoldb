@@ -29,6 +29,7 @@ from pycoldb.compaction import compact_column_family
 from pycoldb.errors import ColumnNotFoundError, PersistenceError, RowNotFoundError
 from pycoldb.keyspace import Keyspace
 from pycoldb.persistence import load_keyspace, save_keyspace
+from pycoldb.query import query_with_filter, range_query
 from pycoldb.ttl import TTLManager
 from tests.strategies import (
     FEW_NAMES,
@@ -120,10 +121,13 @@ def in_name_order(tree: object) -> object:
 def what_readers_see(cf: ColumnFamily) -> list[object]:
     """Return every answer a reader could get from ``cf`` for the names a story uses."""
     seen: list[object] = [cf.row_keys(), cf.row_count]
+    # Whole rows, as range_query and query_with_filter hand them back.
+    seen.append(repr(range_query(cf)))
+    seen.append(repr(query_with_filter(cf, list(FEW_NAMES))))
     for row in FEW_NAMES:
         seen.append(cf.has_row(row))
         try:
-            seen.append(repr(cf.get_row(row).get_columns(ttl_manager=cf.ttl_manager)))
+            seen.append(repr(cf.get_row(row)))  # every column, tombstone and timestamp in it
         except RowNotFoundError as exc:
             seen.append(type(exc).__name__)
         for column in FEW_NAMES:
