@@ -255,6 +255,13 @@ self = ColumnFamilyMachine({'rows': [VarReference(name='rows_0')]})
 E       AssertionError: assert [('alice', 1.0)] == [('alice', 0.0)]
 E
 E         At index 0 diff: ('alice', 1.0) != ('alice', 0.0)
+E
+E         Full diff:
+E           [
+E               (
+E                   'alice',...
+E
+E         ...Full output truncated (6 lines hidden), use '-vv' to show
 E       Failing test case: <state machine>
 E       state = ColumnFamilyMachine()
 E       state.same_crossed_out_grades()
@@ -266,6 +273,11 @@ E       state.delete_row(row=rows_0, timestamp=0.0)
 E       state.same_crossed_out_grades()
 E       state.teardown()
 ```
+
+!!! note "Trailing spaces"
+    In the real output each blank-looking `E` line is an `E` followed by
+    nine spaces. The repository's pre-commit hook trims trailing spaces,
+    so they are trimmed in the listing above. Nothing else is changed.
 
 Read the story at the bottom like a script. Hypothesis tried long, messy
 stories, then shrank them down to **two steps**: write a grade for alice
