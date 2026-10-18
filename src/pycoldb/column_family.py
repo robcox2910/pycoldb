@@ -102,7 +102,8 @@ class ColumnFamily:
             The requested Column.
 
         Raises:
-            RowNotFoundError: If the row doesn't exist.
+            RowNotFoundError: If the row doesn't exist, or has no live
+                columns left.
             ColumnNotFoundError: If the column doesn't exist or is
                 expired/tombstoned.
 
@@ -123,7 +124,8 @@ class ColumnFamily:
             The Row object.
 
         Raises:
-            RowNotFoundError: If the row doesn't exist.
+            RowNotFoundError: If the row doesn't exist, or has no live
+                columns left (every column deleted or expired).
 
         """
         return self._get_row(row_key)
@@ -140,16 +142,21 @@ class ColumnFamily:
                 column's own timestamp). Older writes can't undo it.
 
         Raises:
-            RowNotFoundError: If the row doesn't exist.
-            ColumnNotFoundError: If the column doesn't exist.
+            RowNotFoundError: If the row doesn't exist, or has no live
+                columns left.
+            ColumnNotFoundError: If the column doesn't exist, or is
+                already deleted or expired.
 
         """
         row = self._get_row(row_key)
+        if self.ttl_manager.is_expired(row_key, column_name):
+            msg = f"Column '{column_name}' has expired in row '{row_key}'"
+            raise ColumnNotFoundError(msg)
         row.delete_column(column_name, timestamp=timestamp)
         self.ttl_manager.remove_ttl(row_key, column_name)
 
     def delete_row(self, row_key: str, *, timestamp: float | None = None) -> None:
-        """Soft-delete an entire row by tombstoning all its columns.
+        """Soft-delete an entire row by tombstoning all its live columns.
 
         Args:
             row_key: The row to delete.
@@ -157,11 +164,12 @@ class ColumnFamily:
                 own timestamp).
 
         Raises:
-            RowNotFoundError: If the row doesn't exist.
+            RowNotFoundError: If the row doesn't exist, or has no live
+                columns left.
 
         """
         row = self._get_row(row_key)
-        for col_name in list(row.columns.keys()):
+        for col_name in row.column_names(self.ttl_manager):
             row.delete_column(col_name, timestamp=timestamp)
             self.ttl_manager.remove_ttl(row_key, col_name)
 
@@ -217,6 +225,10 @@ class ColumnFamily:
     def _get_row(self, row_key: str) -> Row:
         """Look up a row by key, raising an error if not found.
 
+        A row whose columns are all deleted or expired counts as not
+        found, exactly as if compaction had already tidied it away. That
+        way compaction never changes what a read returns.
+
         Args:
             row_key: The row key to look up.
 
@@ -224,10 +236,11 @@ class ColumnFamily:
             The Row object.
 
         Raises:
-            RowNotFoundError: If the row doesn't exist.
+            RowNotFoundError: If the row doesn't exist, or has no live
+                columns left.
 
         """
-        if row_key not in self.rows:
+        if not self.has_row(row_key):
             msg = f"Row '{row_key}' not found in column family '{self.name}'"
             raise RowNotFoundError(msg)
         return self.rows[row_key]

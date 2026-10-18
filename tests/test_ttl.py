@@ -161,6 +161,7 @@ class TestTTLWithColumnFamily:
             Column(name="data", value="temp", timestamp=TIMESTAMP_1000),
             ttl_seconds=TINY_TTL,
         )
+        cf.put("key1", Column(name="keep", value="permanent", timestamp=TIMESTAMP_1000))
         time.sleep(TINY_TTL)
         with pytest.raises(ColumnNotFoundError, match="expired"):
             cf.get_column("key1", "data")

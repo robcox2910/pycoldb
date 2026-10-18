@@ -79,6 +79,7 @@ class TestColumnFamilyDeletion:
         """Delete a single column from a row."""
         cf = ColumnFamily(name="grades")
         cf.put("alice", Column(name="math", value="A+", timestamp=TIMESTAMP_1000))
+        cf.put("alice", Column(name="art", value="B", timestamp=TIMESTAMP_1000))
         cf.delete_column("alice", "math")
         with pytest.raises(ColumnNotFoundError):
             cf.get_column("alice", "math")
@@ -156,6 +157,7 @@ def test_column_family_delete_is_last_write_wins() -> None:
     """Through the column family too, a stale write can't resurrect a deleted column."""
     cf = ColumnFamily(name="grades")
     cf.put("alice", Column(name="math", value="A", timestamp=2000))
+    cf.put("alice", Column(name="art", value="B", timestamp=2000))
     cf.delete_column("alice", "math", timestamp=2500)
     cf.put("alice", Column(name="math", value="old", timestamp=2400))
     assert not cf.get_row("alice").has_column("math")
@@ -176,6 +178,7 @@ class TestPutWithTTL:
         """Regression: an ignored, older write used to wipe the newer column's TTL."""
         now = [1000.0]
         cf = ColumnFamily(name="grades", ttl_manager=TTLManager(clock=lambda: now[0]))
+        cf.put("alice", Column(name="art", value="B", timestamp=2.0))
         cf.put("alice", Column(name="math", value="new", timestamp=2.0), ttl_seconds=1.0)
         cf.put("alice", Column(name="math", value="old", timestamp=1.0))  # too old: ignored
         now[0] += 1.0
@@ -189,3 +192,42 @@ class TestPutWithTTL:
         cf.delete_column("bob", "alice")
         cf.put("bob", Column(name="alice", value="", timestamp=0.0), ttl_seconds=1.0)
         assert cf.ttl_manager.entry_count == 0
+
+
+class TestNothingLiveIsMissing:
+    """A row or column with nothing live left reads as missing, before compaction and after."""
+
+    def test_a_row_whose_columns_were_all_deleted_is_not_found(self) -> None:
+        """Regression (found by a property): get_row returned it until compaction, then raised."""
+        cf = ColumnFamily(name="grades")
+        cf.put("alice", Column(name="alice", value=None, timestamp=0.0))
+        cf.delete_column("alice", "alice")
+        with pytest.raises(RowNotFoundError):
+            cf.get_row("alice")
+        with pytest.raises(RowNotFoundError):
+            cf.get_column("alice", "alice")
+        with pytest.raises(RowNotFoundError):
+            cf.delete_row("alice")
+
+    def test_a_row_whose_columns_all_expired_is_not_found(self) -> None:
+        """Regression (found by the model check): it said "column not found" until compaction."""
+        now = [1000.0]
+        cf = ColumnFamily(name="grades", ttl_manager=TTLManager(clock=lambda: now[0]))
+        cf.put("alice", Column(name="alice", value="", timestamp=0.0), ttl_seconds=1.0)
+        now[0] += 1.0
+        with pytest.raises(RowNotFoundError):
+            cf.get_column("alice", "bob")
+        with pytest.raises(RowNotFoundError):
+            cf.get_row("alice")
+
+    def test_an_expired_column_cannot_be_deleted(self) -> None:
+        """Deleting an expired column is refused, just like reading it."""
+        now = [1000.0]
+        cf = ColumnFamily(name="grades", ttl_manager=TTLManager(clock=lambda: now[0]))
+        cf.put("alice", Column(name="math", value="A", timestamp=0.0), ttl_seconds=1.0)
+        cf.put("alice", Column(name="art", value="B", timestamp=0.0))
+        now[0] += 1.0
+        with pytest.raises(ColumnNotFoundError):
+            cf.delete_column("alice", "math")
+        cf.delete_row("alice")
+        assert [t.column_name for t in cf.get_tombstones()] == ["art"]
