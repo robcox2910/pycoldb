@@ -220,3 +220,13 @@ class TestDeletesWinOverOlderWrites:
         assert not row.has_column("grade")
         row.put_column(Column(name="grade", value="newest", timestamp=6000))
         assert row.get_column("grade").value == "newest"
+
+
+def test_put_column_says_whether_the_write_landed() -> None:
+    """put_column returns True for a write that lands, False for one too old to count."""
+    row = Row(key="alice")
+    assert row.put_column(Column(name="math", value="A", timestamp=2.0)) is True
+    assert row.put_column(Column(name="math", value="old", timestamp=1.0)) is False
+    row.delete_column("math")
+    assert row.put_column(Column(name="math", value="tie", timestamp=2.0)) is False
+    assert row.put_column(Column(name="math", value="new", timestamp=3.0)) is True

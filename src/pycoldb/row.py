@@ -52,7 +52,7 @@ class Row:
     columns: dict[str, Column] = field(default_factory=lambda: {})
     tombstones: dict[str, Tombstone] = field(default_factory=lambda: {})
 
-    def put_column(self, column: Column) -> None:
+    def put_column(self, column: Column) -> bool:
         """Insert or update a column in this row.
 
         This is "last write wins" by timestamp, just like the concept
@@ -68,15 +68,19 @@ class Row:
         Args:
             column: The column to insert or update.
 
+        Returns:
+            True if the write landed, False if it was too old and ignored.
+
         """
         tombstone = self.tombstones.get(column.name)
         if tombstone is not None and column.timestamp <= tombstone.deleted_at:
-            return
+            return False
         existing = self.columns.get(column.name)
         if existing is not None and column.timestamp < existing.timestamp:
-            return
+            return False
         self.columns[column.name] = column
         self.tombstones.pop(column.name, None)
+        return True
 
     def get_column(self, name: str) -> Column:
         """Get a column by name.

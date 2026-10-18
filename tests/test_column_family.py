@@ -171,3 +171,21 @@ class TestPutWithTTL:
             cf.put("alice", Column(name="alice", value="x", timestamp=3.0), ttl_seconds=0.0)
         assert not cf.has_row("alice")
         assert cf.ttl_manager.entry_count == 0
+
+    def test_a_write_too_old_to_count_keeps_the_ttl(self) -> None:
+        """Regression: an ignored, older write used to wipe the newer column's TTL."""
+        now = [1000.0]
+        cf = ColumnFamily(name="grades", ttl_manager=TTLManager(clock=lambda: now[0]))
+        cf.put("alice", Column(name="math", value="new", timestamp=2.0), ttl_seconds=1.0)
+        cf.put("alice", Column(name="math", value="old", timestamp=1.0))  # too old: ignored
+        now[0] += 1.0
+        with pytest.raises(ColumnNotFoundError):
+            cf.get_column("alice", "math")
+
+    def test_a_write_too_old_to_undo_a_delete_adds_no_ttl(self) -> None:
+        """Regression (found by a property): an ignored write put a TTL on a deleted column."""
+        cf = ColumnFamily(name="grades")
+        cf.put("bob", Column(name="alice", value="", timestamp=0.0))
+        cf.delete_column("bob", "alice")
+        cf.put("bob", Column(name="alice", value="", timestamp=0.0), ttl_seconds=1.0)
+        assert cf.ttl_manager.entry_count == 0

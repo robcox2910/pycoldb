@@ -64,6 +64,11 @@ class ColumnFamily:
         Think of it as a student walking into class for the first time --
         they get a new record card and their first grade is recorded.
 
+        The TTL belongs to this write: a write that lands sets the
+        column's TTL (or clears it, if ``ttl_seconds`` is None). A write
+        too old to count (see :meth:`Row.put_column`) changes nothing at
+        all, TTL included.
+
         Args:
             row_key: The unique key for the row.
             column: The column to insert or update.
@@ -79,7 +84,8 @@ class ColumnFamily:
             check_ttl(ttl_seconds)
         if row_key not in self.rows:
             self.rows[row_key] = Row(key=row_key)
-        self.rows[row_key].put_column(column)
+        if not self.rows[row_key].put_column(column):
+            return  # too old to count: the column, and its TTL, stay as they were
         if ttl_seconds is not None:
             self.ttl_manager.set_ttl(row_key, column.name, ttl_seconds)
         else:
