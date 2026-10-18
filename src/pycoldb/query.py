@@ -52,7 +52,8 @@ def range_query(
 
     Returns:
         A list of copies of the Row objects whose keys are within the
-        range, sorted by key.
+        range, sorted by key. Each copy holds only its live columns (see
+        :meth:`ColumnFamily.get_row`).
 
     """
     all_keys = cf.row_keys()

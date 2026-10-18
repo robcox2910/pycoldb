@@ -263,3 +263,22 @@ class TestOwnCopies:
         assert cf.get_row("alice").column_names() == ["alice"]
         query_with_filter(cf, ["alice"])[0][1][0].value = "changed"
         assert cf.get_column("alice", "alice").value == ""
+
+
+class TestReadsShowOnlyLiveColumns:
+    """The Row you read holds only live columns, so compaction can't change what it says."""
+
+    def test_get_row_and_range_query_leave_out_expired_and_deleted_columns(self) -> None:
+        """Regression (found in review): the copy still held expired columns and tombstones."""
+        now = [1000.0]
+        cf = ColumnFamily(name="grades", ttl_manager=TTLManager(clock=lambda: now[0]))
+        cf.put("alice", Column(name="math", value="A", timestamp=0.0), ttl_seconds=1.0)
+        cf.put("alice", Column(name="art", value="B", timestamp=0.0))
+        cf.put("alice", Column(name="music", value="C", timestamp=0.0))
+        cf.delete_column("alice", "music")
+        now[0] += 1.0
+        row = cf.get_row("alice")
+        assert row.column_names() == ["art"]
+        assert not row.has_column("math")
+        assert row.tombstones == {}
+        assert [r.column_names() for r in range_query(cf)] == [["art"]]

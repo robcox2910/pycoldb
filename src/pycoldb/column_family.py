@@ -23,7 +23,6 @@ Example:
 
 """
 
-import copy
 from dataclasses import dataclass, field, replace
 
 from pycoldb.column import Column
@@ -124,15 +123,19 @@ class ColumnFamily:
             row_key: The row key to look up.
 
         Returns:
-            A copy of the Row (changing it changes nothing in the column
-            family; use :meth:`put` and :meth:`delete_column` for that).
+            A copy of the Row holding only its live columns: no expired
+            columns and no tombstones, so it reads the same before and
+            after compaction. Changing it changes nothing in the column
+            family; use :meth:`put` and :meth:`delete_column` for that.
 
         Raises:
             RowNotFoundError: If the row doesn't exist, or has no live
                 columns left (every column deleted or expired).
 
         """
-        return copy.deepcopy(self._get_row(row_key))
+        row = self._get_row(row_key)
+        live = row.column_names(self.ttl_manager)
+        return Row(key=row_key, columns={name: replace(row.columns[name]) for name in live})
 
     def delete_column(
         self, row_key: str, column_name: str, *, timestamp: float | None = None
