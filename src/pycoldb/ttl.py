@@ -23,9 +23,26 @@ Example:
 """
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from pycoldb.errors import InvalidTTLError
+
+
+def check_ttl(ttl_seconds: float) -> None:
+    """Refuse a TTL that isn't a positive number of seconds.
+
+    Args:
+        ttl_seconds: The TTL to check.
+
+    Raises:
+        InvalidTTLError: If ttl_seconds is not positive. (This is also a
+            ValueError, so ``except ValueError`` still works.)
+
+    """
+    if ttl_seconds <= 0:
+        msg = f"TTL must be positive, got {ttl_seconds}"
+        raise InvalidTTLError(msg)
 
 
 @dataclass
@@ -104,11 +121,32 @@ class TTLManager:
 
     Each column that has a TTL set is uniquely identified by the pair
     (row_key, column_name).
+
+    The manager reads the time from a **clock**: the computer's real
+    clock (``time.time``) unless you hand it another one. A test can
+    pass a pretend clock that it moves forward by hand, so it can check
+    what happens after an hour without waiting an hour.
     """
 
-    def __init__(self) -> None:
-        """Initialize an empty TTL manager."""
+    def __init__(self, *, clock: Callable[[], float] | None = None) -> None:
+        """Initialize an empty TTL manager.
+
+        Args:
+            clock: A function that returns the current time in epoch
+                seconds. If None, uses the real clock (``time.time``).
+
+        """
         self._entries: dict[tuple[str, str], TTLEntry] = {}
+        self._clock = clock
+
+    def _now(self) -> float:
+        """Return the current time from this manager's clock.
+
+        Returns:
+            The current time in epoch seconds.
+
+        """
+        return self._clock() if self._clock is not None else time.time()
 
     def _make_key(self, row_key: str, column_name: str) -> tuple[str, str]:
         """Create a composite key for the TTL lookup.
@@ -140,11 +178,9 @@ class TTLManager:
                 also a ValueError, so ``except ValueError`` still works.)
 
         """
-        if ttl_seconds <= 0:
-            msg = f"TTL must be positive, got {ttl_seconds}"
-            raise InvalidTTLError(msg)
+        check_ttl(ttl_seconds)
         key = self._make_key(row_key, column_name)
-        self._entries[key] = TTLEntry(created_at=time.time(), ttl_seconds=ttl_seconds)
+        self._entries[key] = TTLEntry(created_at=self._now(), ttl_seconds=ttl_seconds)
 
     def is_expired(self, row_key: str, column_name: str) -> bool:
         """Check whether a column's TTL has expired.
@@ -164,7 +200,7 @@ class TTLManager:
         entry = self._entries.get(key)
         if entry is None:
             return False
-        return entry.is_expired()
+        return entry.is_expired(self._now())
 
     def remove_ttl(self, row_key: str, column_name: str) -> None:
         """Remove the TTL for a specific column.
@@ -187,9 +223,10 @@ class TTLManager:
             A list of column names that have expired.
 
         """
+        now = self._now()
         expired: list[str] = []
         for (entry_row_key, column_name), entry in self._entries.items():
-            if entry_row_key == row_key and entry.is_expired():
+            if entry_row_key == row_key and entry.is_expired(now):
                 expired.append(column_name)
         return expired
 
@@ -216,17 +253,24 @@ class TTLManager:
         ]
 
     @classmethod
-    def from_dict(cls, data: list[dict[str, str | float]]) -> TTLManager:
+    def from_dict(
+        cls,
+        data: list[dict[str, str | float]],
+        *,
+        clock: Callable[[], float] | None = None,
+    ) -> TTLManager:
         """Create a TTLManager from a list of records.
 
         Args:
             data: A list of records as produced by :meth:`to_dict`.
+            clock: The clock the new manager reads (see the class
+                docstring). If None, uses the real clock.
 
         Returns:
             A new TTLManager instance.
 
         """
-        manager = cls()
+        manager = cls(clock=clock)
         for record in data:
             row_key = str(record["row_key"])
             column_name = str(record["column_name"])

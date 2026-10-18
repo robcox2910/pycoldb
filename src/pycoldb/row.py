@@ -52,7 +52,7 @@ class Row:
     columns: dict[str, Column] = field(default_factory=lambda: {})
     tombstones: dict[str, Tombstone] = field(default_factory=lambda: {})
 
-    def put_column(self, column: Column) -> None:
+    def put_column(self, column: Column) -> bool:
         """Insert or update a column in this row.
 
         This is "last write wins" by timestamp, just like the concept
@@ -68,15 +68,19 @@ class Row:
         Args:
             column: The column to insert or update.
 
+        Returns:
+            True if the write landed, False if it was too old and ignored.
+
         """
         tombstone = self.tombstones.get(column.name)
         if tombstone is not None and column.timestamp <= tombstone.deleted_at:
-            return
+            return False
         existing = self.columns.get(column.name)
         if existing is not None and column.timestamp < existing.timestamp:
-            return
+            return False
         self.columns[column.name] = column
         self.tombstones.pop(column.name, None)
+        return True
 
     def get_column(self, name: str) -> Column:
         """Get a column by name.
@@ -171,7 +175,8 @@ class Row:
         """Get multiple columns, optionally filtered by name.
 
         Args:
-            names: If provided, only return columns with these names.
+            names: If provided, only return columns with these names
+                (each column at most once, even if its name is repeated).
                 If None, return all live columns.
             ttl_manager: If provided, expired columns are hidden.
 
@@ -182,7 +187,8 @@ class Row:
         if names is None:
             live_names = self.column_names(ttl_manager)
         else:
-            candidates = (n for n in names if n in self.columns and n not in self.tombstones)
+            # A set, so a name asked for twice still gives its column once.
+            candidates = (n for n in set(names) if n in self.columns and n not in self.tombstones)
             if ttl_manager is not None:
                 candidates = (n for n in candidates if not ttl_manager.is_expired(self.key, n))
             live_names = sorted(candidates)

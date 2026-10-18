@@ -34,6 +34,14 @@ cleaned = compact_column_family(grades)
 print(f"Cleaned up {cleaned} entries")  # Cleaned up 2 entries
 ```
 
+## Compaction Never Changes an Answer
+
+Compaction is tidying, not editing. Whatever a read returned just before
+compaction, it returns just after. That's why a row whose grades have all
+been deleted or have expired already counts as missing *before* compaction:
+`get_row` raises `RowNotFoundError`, exactly as it will once compaction has
+thrown the empty record card away.
+
 ## When Does Compaction Happen?
 
 In real databases like Cassandra, compaction runs automatically in the background. In our educational version, you call it manually whenever you want to clean up. This lets you see exactly what's happening and learn how it works!

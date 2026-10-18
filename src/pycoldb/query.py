@@ -51,8 +51,9 @@ def range_query(
         inclusive_end: Whether to include the end key itself.
 
     Returns:
-        A list of Row objects whose keys are within the range,
-        sorted by key.
+        A list of copies of the Row objects whose keys are within the
+        range, sorted by key. Each copy holds only its live columns (see
+        :meth:`ColumnFamily.get_row`).
 
     """
     all_keys = cf.row_keys()
@@ -69,7 +70,7 @@ def range_query(
                 continue
             if not inclusive_end and key >= end_key:
                 continue
-        result.append(cf.rows[key])
+        result.append(cf.get_row(key))  # a copy, so changing it can't reach cf
 
     return result
 

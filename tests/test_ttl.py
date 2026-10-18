@@ -155,13 +155,15 @@ class TestTTLWithColumnFamily:
 
     def test_expired_column_raises(self) -> None:
         """Raise ColumnNotFoundError for expired columns."""
-        cf = ColumnFamily(name="cache")
+        now = [CREATED_AT_1000]
+        cf = ColumnFamily(name="cache", ttl_manager=TTLManager(clock=lambda: now[0]))
         cf.put(
             "key1",
             Column(name="data", value="temp", timestamp=TIMESTAMP_1000),
-            ttl_seconds=TINY_TTL,
+            ttl_seconds=TTL_60_SECONDS,
         )
-        time.sleep(TINY_TTL)
+        cf.put("key1", Column(name="keep", value="permanent", timestamp=TIMESTAMP_1000))
+        now[0] += TTL_60_SECONDS
         with pytest.raises(ColumnNotFoundError, match="expired"):
             cf.get_column("key1", "data")
 
@@ -247,3 +249,27 @@ class TestTTLReadVisibility:
         cf = self._expired_cf()
         results = query_with_filter(cf, ["data"])
         assert [key for key, _ in results] == ["alive"]
+
+
+class TestPretendClock:
+    """A TTLManager can read a pretend clock instead of the real one."""
+
+    def test_columns_expire_when_the_pretend_clock_moves(self) -> None:
+        """Moving a pretend clock past the TTL expires the column, with no waiting."""
+        now = [CREATED_AT_1000]
+        manager = TTLManager(clock=lambda: now[0])
+        manager.set_ttl("row1", "col1", TTL_60_SECONDS)
+        now[0] = CREATED_AT_1000 + TTL_60_SECONDS - 1
+        assert not manager.is_expired("row1", "col1")
+        assert manager.get_expired_columns("row1") == []
+        now[0] = CREATED_AT_1000 + TTL_60_SECONDS
+        assert manager.is_expired("row1", "col1")
+        assert manager.get_expired_columns("row1") == ["col1"]
+
+    def test_from_dict_keeps_the_pretend_clock(self) -> None:
+        """A manager rebuilt from records reads the clock it was given."""
+        records = TTLManager(clock=lambda: CREATED_AT_100).to_dict()
+        restored = TTLManager.from_dict(records, clock=lambda: CREATED_AT_1000)
+        assert restored.entry_count == 0
+        restored.set_ttl("row1", "col1", TTL_60_SECONDS)
+        assert restored.to_dict()[0]["created_at"] == CREATED_AT_1000

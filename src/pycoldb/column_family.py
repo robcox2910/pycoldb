@@ -23,13 +23,13 @@ Example:
 
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pycoldb.column import Column
 from pycoldb.errors import ColumnNotFoundError, RowNotFoundError
 from pycoldb.row import Row
 from pycoldb.tombstone import Tombstone
-from pycoldb.ttl import TTLManager
+from pycoldb.ttl import TTLManager, check_ttl
 
 
 @dataclass
@@ -64,16 +64,29 @@ class ColumnFamily:
         Think of it as a student walking into class for the first time --
         they get a new record card and their first grade is recorded.
 
+        The TTL belongs to this write: a write that lands sets the
+        column's TTL (or clears it, if ``ttl_seconds`` is None). A write
+        too old to count (see :meth:`Row.put_column`) changes nothing at
+        all, TTL included.
+
         Args:
             row_key: The unique key for the row.
             column: The column to insert or update.
             ttl_seconds: Optional time-to-live in seconds. If set,
                 the column will expire after this many seconds.
 
+        Raises:
+            InvalidTTLError: If ttl_seconds is not positive. Nothing is
+                written: the check happens before the write.
+
         """
+        if ttl_seconds is not None:
+            check_ttl(ttl_seconds)
         if row_key not in self.rows:
             self.rows[row_key] = Row(key=row_key)
-        self.rows[row_key].put_column(column)
+        # Store a copy, so changing ``column`` afterwards can't change the grade.
+        if not self.rows[row_key].put_column(replace(column)):
+            return  # too old to count: the column, and its TTL, stay as they were
         if ttl_seconds is not None:
             self.ttl_manager.set_ttl(row_key, column.name, ttl_seconds)
         else:
@@ -87,10 +100,12 @@ class ColumnFamily:
             column_name: The column to get.
 
         Returns:
-            The requested Column.
+            A copy of the requested Column (changing it changes nothing
+            in the column family).
 
         Raises:
-            RowNotFoundError: If the row doesn't exist.
+            RowNotFoundError: If the row doesn't exist, or has no live
+                columns left.
             ColumnNotFoundError: If the column doesn't exist or is
                 expired/tombstoned.
 
@@ -99,7 +114,7 @@ class ColumnFamily:
         if self.ttl_manager.is_expired(row_key, column_name):
             msg = f"Column '{column_name}' has expired in row '{row_key}'"
             raise ColumnNotFoundError(msg)
-        return row.get_column(column_name)
+        return replace(row.get_column(column_name))
 
     def get_row(self, row_key: str) -> Row:
         """Get a full row by its key.
@@ -108,13 +123,19 @@ class ColumnFamily:
             row_key: The row key to look up.
 
         Returns:
-            The Row object.
+            A copy of the Row holding only its live columns: no expired
+            columns and no tombstones, so it reads the same before and
+            after compaction. Changing it changes nothing in the column
+            family; use :meth:`put` and :meth:`delete_column` for that.
 
         Raises:
-            RowNotFoundError: If the row doesn't exist.
+            RowNotFoundError: If the row doesn't exist, or has no live
+                columns left (every column deleted or expired).
 
         """
-        return self._get_row(row_key)
+        row = self._get_row(row_key)
+        live = row.column_names(self.ttl_manager)
+        return Row(key=row_key, columns={name: replace(row.columns[name]) for name in live})
 
     def delete_column(
         self, row_key: str, column_name: str, *, timestamp: float | None = None
@@ -128,16 +149,21 @@ class ColumnFamily:
                 column's own timestamp). Older writes can't undo it.
 
         Raises:
-            RowNotFoundError: If the row doesn't exist.
-            ColumnNotFoundError: If the column doesn't exist.
+            RowNotFoundError: If the row doesn't exist, or has no live
+                columns left.
+            ColumnNotFoundError: If the column doesn't exist, or is
+                already deleted or expired.
 
         """
         row = self._get_row(row_key)
+        if self.ttl_manager.is_expired(row_key, column_name):
+            msg = f"Column '{column_name}' has expired in row '{row_key}'"
+            raise ColumnNotFoundError(msg)
         row.delete_column(column_name, timestamp=timestamp)
         self.ttl_manager.remove_ttl(row_key, column_name)
 
     def delete_row(self, row_key: str, *, timestamp: float | None = None) -> None:
-        """Soft-delete an entire row by tombstoning all its columns.
+        """Soft-delete an entire row by tombstoning all its live columns.
 
         Args:
             row_key: The row to delete.
@@ -145,11 +171,12 @@ class ColumnFamily:
                 own timestamp).
 
         Raises:
-            RowNotFoundError: If the row doesn't exist.
+            RowNotFoundError: If the row doesn't exist, or has no live
+                columns left.
 
         """
         row = self._get_row(row_key)
-        for col_name in list(row.columns.keys()):
+        for col_name in row.column_names(self.ttl_manager):
             row.delete_column(col_name, timestamp=timestamp)
             self.ttl_manager.remove_ttl(row_key, col_name)
 
@@ -205,6 +232,10 @@ class ColumnFamily:
     def _get_row(self, row_key: str) -> Row:
         """Look up a row by key, raising an error if not found.
 
+        A row whose columns are all deleted or expired counts as not
+        found, exactly as if compaction had already tidied it away. That
+        way compaction never changes what a read returns.
+
         Args:
             row_key: The row key to look up.
 
@@ -212,10 +243,11 @@ class ColumnFamily:
             The Row object.
 
         Raises:
-            RowNotFoundError: If the row doesn't exist.
+            RowNotFoundError: If the row doesn't exist, or has no live
+                columns left.
 
         """
-        if row_key not in self.rows:
+        if not self.has_row(row_key):
             msg = f"Row '{row_key}' not found in column family '{self.name}'"
             raise RowNotFoundError(msg)
         return self.rows[row_key]

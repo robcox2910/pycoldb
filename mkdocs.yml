@@ -49,6 +49,7 @@ nav:
   - Saving Safely -- Never Half a File: concepts/saving-safely.md
   - Tombstones -- Crossing Out Instead of Erasing: concepts/tombstones.md
   - TTL -- Temporary Sticky Notes: concepts/ttl.md
+  - Property Testing -- Copying Out the Gradebook: property-testing.md
   # series-nav:start
   - The series:
       - Series home: https://robcox2910.github.io/
