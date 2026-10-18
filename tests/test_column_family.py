@@ -5,6 +5,7 @@ import pytest
 from pycoldb.column import Column
 from pycoldb.column_family import ColumnFamily
 from pycoldb.errors import ColumnNotFoundError, InvalidTTLError, RowNotFoundError
+from pycoldb.query import query_with_filter, range_query
 from pycoldb.ttl import TTLManager
 
 TIMESTAMP_1000 = 1000.0
@@ -231,3 +232,34 @@ class TestNothingLiveIsMissing:
             cf.delete_column("alice", "math")
         cf.delete_row("alice")
         assert [t.column_name for t in cf.get_tombstones()] == ["art"]
+
+
+class TestOwnCopies:
+    """The column family keeps its own copies: changing what you hand in or get back can't reach it."""
+
+    def test_changing_a_column_after_writing_it_changes_nothing(self) -> None:
+        """Editing the Column you passed to put leaves the stored grade alone."""
+        cf = ColumnFamily(name="grades")
+        column = Column(name="math", value="A", timestamp=TIMESTAMP_1000)
+        cf.put("alice", column)
+        column.value = "F"
+        assert cf.get_column("alice", "math").value == "A"
+
+    def test_changing_a_column_you_read_changes_nothing(self) -> None:
+        """Editing a Column that get_column returned leaves the stored grade alone."""
+        cf = ColumnFamily(name="grades")
+        cf.put("alice", Column(name="math", value="A", timestamp=TIMESTAMP_1000))
+        cf.get_column("alice", "math").value = "F"
+        assert cf.get_column("alice", "math").value == "A"
+
+    def test_changing_a_row_you_read_changes_nothing(self) -> None:
+        """Regression (found by the model check): a column added to get_row's Row stuck."""
+        cf = ColumnFamily(name="grades")
+        cf.put("alice", Column(name="alice", value="", timestamp=0.0))
+        cf.get_row("alice").put_column(Column(name="sneaky", value="x", timestamp=99.0))
+        assert cf.get_row("alice").column_names() == ["alice"]
+        rows = range_query(cf)
+        rows[0].columns.clear()
+        assert cf.get_row("alice").column_names() == ["alice"]
+        query_with_filter(cf, ["alice"])[0][1][0].value = "changed"
+        assert cf.get_column("alice", "alice").value == ""

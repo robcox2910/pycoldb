@@ -23,7 +23,8 @@ Example:
 
 """
 
-from dataclasses import dataclass, field
+import copy
+from dataclasses import dataclass, field, replace
 
 from pycoldb.column import Column
 from pycoldb.errors import ColumnNotFoundError, RowNotFoundError
@@ -84,7 +85,8 @@ class ColumnFamily:
             check_ttl(ttl_seconds)
         if row_key not in self.rows:
             self.rows[row_key] = Row(key=row_key)
-        if not self.rows[row_key].put_column(column):
+        # Store a copy, so changing ``column`` afterwards can't change the grade.
+        if not self.rows[row_key].put_column(replace(column)):
             return  # too old to count: the column, and its TTL, stay as they were
         if ttl_seconds is not None:
             self.ttl_manager.set_ttl(row_key, column.name, ttl_seconds)
@@ -99,7 +101,8 @@ class ColumnFamily:
             column_name: The column to get.
 
         Returns:
-            The requested Column.
+            A copy of the requested Column (changing it changes nothing
+            in the column family).
 
         Raises:
             RowNotFoundError: If the row doesn't exist, or has no live
@@ -112,7 +115,7 @@ class ColumnFamily:
         if self.ttl_manager.is_expired(row_key, column_name):
             msg = f"Column '{column_name}' has expired in row '{row_key}'"
             raise ColumnNotFoundError(msg)
-        return row.get_column(column_name)
+        return replace(row.get_column(column_name))
 
     def get_row(self, row_key: str) -> Row:
         """Get a full row by its key.
@@ -121,14 +124,15 @@ class ColumnFamily:
             row_key: The row key to look up.
 
         Returns:
-            The Row object.
+            A copy of the Row (changing it changes nothing in the column
+            family; use :meth:`put` and :meth:`delete_column` for that).
 
         Raises:
             RowNotFoundError: If the row doesn't exist, or has no live
                 columns left (every column deleted or expired).
 
         """
-        return self._get_row(row_key)
+        return copy.deepcopy(self._get_row(row_key))
 
     def delete_column(
         self, row_key: str, column_name: str, *, timestamp: float | None = None
