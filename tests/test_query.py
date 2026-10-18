@@ -130,3 +130,12 @@ class TestQueryWithFilter:
         results = query_with_filter(cf, ["art"])
         assert len(results) == 1
         assert results[0][0] == "charlie"
+
+
+def test_asking_for_a_column_twice_returns_it_once() -> None:
+    """Regression (found by the model check): a repeated name returned the column twice."""
+    cf = ColumnFamily(name="grades")
+    cf.put("alice", Column(name="alice", value="", timestamp=0.0))
+    results = query_with_filter(cf, ["alice", "alice"])
+    assert [(key, [c.name for c in cols]) for key, cols in results] == [("alice", ["alice"])]
+    assert [c.name for c in column_filter(cf.rows["alice"], ["alice", "alice"])] == ["alice"]
