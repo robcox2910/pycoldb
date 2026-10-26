@@ -51,6 +51,14 @@ They're great when:
 - You have LOTS of data (billions of rows)
 - You need fast reads and writes
 
+## Install
+
+```bash
+pip install fromscratch-pycoldb
+```
+
+Or get the whole series at once with `pip install fromscratch-pystack`. To read the code or run the tests, clone it from [GitHub](https://github.com/robcox2910/pycoldb).
+
 ## Getting Started
 
 ```python
