@@ -1,5 +1,5 @@
 [project]
-name = "pycoldb"
+name = "fromscratch-pycoldb"
 dynamic = ["version"]
 description = "An educational column-family store library built from scratch in Python"
 readme = "README.md"
