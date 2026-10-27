@@ -1,4 +1,8 @@
-# What is a Column-Family Store?
+---
+title: "Build your own column-family database in Python"
+---
+
+# PyColDB: Build your own column-family database in Python
 
 ## The Spreadsheet That Breaks the Rules
 
